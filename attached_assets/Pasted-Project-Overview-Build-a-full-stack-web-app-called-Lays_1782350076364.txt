@@ -1,0 +1,341 @@
+Project Overview
+
+Build a full-stack web app called "Lays Dapps Hub" — a community-run directory of dApps, tools, and games built around the Ritual (ritual.net) AI/crypto ecosystem. These dapps have already been reviewed and approved by Ritual community moderators. This is a community project, not an official Ritual Foundation product. Display "Community Hub — not an official Ritual Foundation product" clearly in the header and footer at all times.
+
+Core purpose: help the Ritual community discover dApps, track which dApps are most clicked through this site specifically, flag dApps by safety status, and require a small testnet-token access fee per browser session to support ongoing maintenance and discourage spam/bot traffic.
+
+Tech stack
+
+
+Framework: Next.js (App Router) with TypeScript
+Styling: Tailwind CSS
+ORM: use Prisma specifically — do not use Drizzle or any other ORM. This is a hard requirement, not a default suggestion.
+Database: PostgreSQL hosted on Supabase, from the very start — do NOT use SQLite at any point, not even temporarily for local dev. This avoids any future SQLite-to-Postgres migration, since this app will be deployed to Vercel later (ephemeral filesystem, incompatible with file-based SQLite).
+Connection strings will be provided as Replit Secrets under these exact names (Replit's runtime reserves the plain name DATABASE_URL for its own built-in database integration, so these custom names must be used instead): SUPABASE_DATABASE_URL (pooled connection, port 6543, via PgBouncer — used for the app's normal runtime queries) and SUPABASE_DIRECT_URL (direct connection, port 5432 — used only by Prisma when running migrations). Set up schema.prisma like this:
+
+
+prisma  datasource db {
+    provider  = "postgresql"
+    url       = env("SUPABASE_DATABASE_URL")
+    directUrl = env("SUPABASE_DIRECT_URL")
+  }
+
+
+Wallet connection: wagmi + viem, with EIP-6963 multi-wallet discovery (supports MetaMask, OKX Wallet, Rabby, and any other EIP-6963-compliant injected wallet — detect what's installed and show a connector button per wallet, no hardcoded single connector)
+No traditional auth system (no NextAuth, no password login anywhere in the app) — admin access and regular access are both gated by wallet address / wallet connection only
+Must run on Replit out of the box (bind to 0.0.0.0 and process.env.PORT) and must also be deployable to Vercel later without changes (avoid anything that assumes a persistent local filesystem)
+
+
+Ritual Chain testnet config (use exactly this)
+
+tsimport { defineChain } from "viem"
+
+export const ritualChain = defineChain({
+  id: 1979,
+  name: "Ritual Chain",
+  nativeCurrency: { name: "RITUAL", symbol: "RITUAL", decimals: 18 },
+  rpcUrls: {
+    default: { http: ["https://rpc.ritualfoundation.org"] },
+  },
+  blockExplorers: {
+    default: { name: "Explorer", url: "https://explorer.ritualfoundation.org" },
+  },
+})
+
+tsexport const ADMIN_WALLET_ADDRESS = "0x620b04c69ba313d8cd841a5426646019881aa17c".toLowerCase()
+export const FEE_RECEIVER_ADDRESS = "0x620b04c69ba313d8cd841a5426646019881aa17c"
+
+Database schema
+
+Dapp
+
+
+id (string, cuid, primary key)
+name (string)
+url (string)
+creatorHandle (string, nullable)
+category (enum: game, tool, identity, finance, quiz, social, other)
+description (string, short, nullable)
+status (enum: verified, unverified, reported — default verified, per site owner's decision)
+flaggedForReview (boolean, default false) — kept for the owner's own future manual re-review, does not currently affect the public badge color
+clickCount (integer, default 0)
+createdAt (datetime)
+approved (boolean, default false) — only approved dapps show publicly
+needsLinkRecheck (boolean, default false) — true for entries not yet manually link-checked; these stay approved: false until checked
+
+
+ClickLog — id, dappId (FK), timestamp. No personal data.
+
+Report — id, dappId (FK), reason, createdAt, resolved (boolean, default false)
+
+PaidAccess — payment LOG only, does not grant persistent access (access is session-based, see below): id, address (lowercase), txHash, sessionId, paidAt
+
+Pages and routes
+
+
+Home (/) — header with: real Ritual logo at /public/logo.png (I will add this file myself, do not generate/modify it), brand text "Lays Dapps Hub" next to it, "Community Hub — unofficial" label, nav (Home, Leaderboard, Submit, Proof Log, About), small official-link icons (Website/X/Discord/GitHub), and once connected: truncated wallet address + Disconnect button. Hero section. Stats bar (4 cards: total approved dapps, verified count, clicks today, reported count). Weekly leaderboard (top 10 by clicks). Full browsable grid with category filter + search. Status badges (verified=green, unverified=amber, reported=red) always shown with text label, never color alone.
+Redirect handler (/go/[id]) — no UI. Increment clickCount, insert ClickLog row, 302 redirect to the real url. Every "Visit" button site-wide must use this route, no direct external links anywhere else.
+Leaderboard (/leaderboard) — full sortable leaderboard, toggle "this week" (from ClickLog) vs "all time" (clickCount).
+Submit dapp (/submit) — form: name, url, creatorHandle, category, short description (max 200 chars). New submissions: approved: false, status: 'unverified', needsLinkRecheck: false. Validate https url, required name, no duplicate url (case-insensitive).
+Proof log (/proof-log) — public, paginated, most recent 200 ClickLog entries (dapp name + relative time only).
+About (/about) — public, NOT gated by wallet or fee. Explains the project is community-run/unofficial, what status badges mean, the verification checklist, how to report a dapp, and explains the one-time-per-session access fee before visitors connect.
+Admin panel (/admin) — gated by wallet address, not password:
+
+Not connected → show the same multi-wallet connect gate used elsewhere (no fee required here).
+Connected but address ≠ ADMIN_WALLET_ADDRESS (case-insensitive compare) → show "This wallet does not have admin access", no admin data exposed.
+Connected and address matches → full admin panel: pending submissions (approve/reject), all-dapps list with status/flag controls, reports list with resolve action. Re-verify the admin address server-side in every mutating API route too, never trust client-side checks alone.
+Admin access is exempt from the access fee entirely.
+
+
+
+
+
+Wallet connection + access fee flow (applies to /, /leaderboard, /submit, /proof-log — NOT /about or /admin)
+
+
+Connect wallet — detect installed wallets via EIP-6963 and show one button per detected wallet (e.g. "Connect with MetaMask", "Connect with OKX Wallet", "Connect with Rabby Wallet"). If only one is detected, show a single "Connect Wallet" button. If none detected, show install links for MetaMask (https://metamask.io/download), OKX Wallet (https://www.okx.com/web3), and Rabby (https://rabby.io).
+Check chain — if connected but chainId !== 1979, show "Switch to Ritual Chain" using wagmi's switchChain; this triggers the wallet's add-network flow automatically if Ritual Chain isn't added yet.
+Pay the per-session access fee — once connected and on the right chain, check (via a server API route + an httpOnly, no-Max-Age session cookie) whether this browser session has already paid. If not, show:
+
+"This session requires a 0.001 RITUAL access fee (testnet token, no real monetary value) — this is an anti-spam step that also helps support ongoing updates to the dapp directory. You'll need to pay again next time you visit or reconnect."
+with a "Pay 0.001 RITUAL" button that uses useSendTransaction (to: FEE_RECEIVER_ADDRESS, value: parseEther("0.001")). Never auto-trigger or auto-approve this — the wallet's own confirmation popup must appear every time, exactly as wallets are designed to require.
+
+
+
+
+After the transaction is sent, wait for confirmation (useWaitForTransactionReceipt), then call a server API route that independently re-verifies on-chain (via https://rpc.ritualfoundation.org) that the tx is confirmed, to matches FEE_RECEIVER_ADDRESS, and value >= parseEther("0.001") — only then set the session cookie and log the payment to PaidAccess. Never trust a client-side "payment succeeded" claim alone.
+Session boundary: the session cookie has no Max-Age/Expires (true browser-session cookie). It clears when the browser fully closes. On explicit "Disconnect" click, also clear/invalidate the session cookie via an API call, so reconnecting in the same tab asks for payment again too. Refreshing or navigating between pages within the same open session does NOT ask for payment again.
+
+
+Global Design System — apply to EVERY page, route, and component
+
+Before writing any page, build a design system first, then apply it everywhere. Every page listed below must use the exact same design language — no page should look unfinished or visually inconsistent with the rest:
+
+
+Home
+Leaderboard
+Submit Dapp
+Dapp Details (if/when built)
+User Profile (if/when built)
+Search Results
+Admin Pages
+Wallet Connection Screens
+Error Pages
+Empty States
+Loading States
+
+
+Design tokens (use these exact values consistently everywhere — define them once as CSS variables or a Tailwind theme config, never hardcode raw color/spacing values inline in components):
+
+
+Primary accent: deep teal/forest green #0F6E56
+Secondary accent: warm amber #BA7517
+Dark background: #161616 (default mode)
+Light background: #F7F6F2
+Status colors: verified=green, unverified=amber, reported=red (always paired with a text label, never color alone)
+One consistent border-radius scale (e.g. sm/md/lg), one consistent shadow scale, one consistent spacing scale
+One typography scale (font sizes, weights, line-heights) used identically across every page — sans-serif (Inter or similar) for UI text
+
+
+Build these as reusable, shared components FIRST, then compose every page out of them — do not let any page build its own one-off button/card/input style:
+
+
+Primary Button, Secondary Button
+Card
+Modal
+Badge (for verified/unverified/reported and any other status tags)
+Input
+Dropdown
+Search Bar
+Navigation Item
+
+
+Consistency requirements:
+
+
+Same color palette, typography scale, card styles, border radius, shadows, animations, buttons, form inputs, and badges everywhere, with zero exceptions.
+Wallet connection screens, error pages, empty states, and loading states are part of the product too — they must use the same component library and tokens as the main pages, not a separate quickly-thrown-together style.
+The overall feel should read as a premium, professional Web3 product — think the visual polish level of Ritual's own site, Farcaster, Linear, Vercel's dashboard, or Stripe's dashboard — clean, confident, lots of whitespace, no clutter, no inconsistent one-off styling per page.
+Distinct from ritual.net's exact layout/green shade (related mood, not a copy), as established earlier.
+Dark mode default, light mode supported, using the same token set in both.
+This is a styling foundation, not a functionality change — once built, every feature described elsewhere in this prompt (wallet gating, fee flow, admin panel, leaderboard, etc.) must work exactly as specified; the design system only governs how things look, never what they do.
+
+
+Footer
+
+A simple, standard official-links row (icon + label, opens in new tab, rel="noopener noreferrer"):
+
+
+Website → https://ritual.net
+X → https://x.com/ritualnet
+Discord → https://discord.com/invite/ritual-net
+GitHub → https://github.com/ritual-net
+
+
+Plus, below or beside that row, a small creator credit: circular avatar image (/public/creator-avatar.jpg, border-radius: 50%, ~32px mobile / 40px desktop, object-fit: cover) next to the text "Built by Lays ↗" linking to https://x.com/Laysraymond66. Plus the "Community Hub — not an official Ritual Foundation product" disclaimer line.
+
+seed.ts — full dapps dataset
+
+tsimport { PrismaClient } from '@prisma/client'
+const prisma = new PrismaClient()
+
+type SeedDapp = {
+  name: string
+  url: string
+  creatorHandle: string
+  category: 'game' | 'tool' | 'identity' | 'finance' | 'quiz' | 'social' | 'other'
+  approved: boolean
+  flaggedForReview: boolean
+  needsLinkRecheck: boolean
+}
+
+const dapps: SeedDapp[] = [
+  { name: "Ritual Onchain ID", url: "https://ritual-onchain-id.vercel.app/", creatorHandle: "maharshi_17904", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Address Analyzer", url: "https://ritual-stats-check.vercel.app/", creatorHandle: "0xtanoy", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "GRITUAL Strike", url: "https://gritual-striker.vercel.app/", creatorHandle: "kency17", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Siggy's Virtual Arcade", url: "https://siggy-arcade.vercel.app/", creatorHandle: "0x0saragi", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Builder Proof", url: "https://ritual-builder-proof.pages.dev/", creatorHandle: "pushkin_ievgen", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Tamagotchi", url: "https://ritual-tamagotchi.vercel.app/", creatorHandle: "mirage5815", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Mission Console", url: "https://ritual-console.netlify.app/", creatorHandle: "herbcase", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Jumping Siggy", url: "https://jumping-siggy-the-pussy.vercel.app/", creatorHandle: "randzkie05", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Rekt or Rich", url: "https://ramavenom.github.io/rekt-or-rich/", creatorHandle: "ramaxwhale", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Micro Tap", url: "https://ritual-micro-tap.vercel.app/", creatorHandle: "lubudebotton", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Encrypted Research", url: "https://research-vault-beta.vercel.app/", creatorHandle: "cripson", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Oracle", url: "https://ritual-oracle-two.vercel.app/", creatorHandle: "tutubear", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Arena", url: "https://ritualarena1.vercel.app/", creatorHandle: "jonikeciltomuch", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritcord Discord Tracker", url: "https://www.ritcord.xyz/", creatorHandle: "marksocrates", category: "social", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Coin Flip", url: "https://ritual-flip.vercel.app/", creatorHandle: "nheoweb3", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Identity Generator", url: "https://ritual-card-pfp-generator.vercel.app/", creatorHandle: "emir_ethh", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Staking", url: "https://ritual-lst.vercel.app/", creatorHandle: "yourinuu", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Siggy Streaks", url: "https://siggystreaks.vercel.app/en", creatorHandle: "Thomas", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Guess The Ritualists", url: "https://guess-the-ritualist.vercel.app/", creatorHandle: "oluwasegun1334", category: "quiz", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Paws", url: "https://ritual-paws.vercel.app/", creatorHandle: "_neitenoz26", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "RitualPad", url: "https://ritual-rocketpad.vercel.app/", creatorHandle: "noyon_12", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "3D Case Sealer", url: "https://ritual-mystery-box.vercel.app/", creatorHandle: "sarimbby", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Sky Predict", url: "https://skypredict.app/", creatorHandle: "pemburuhadiah_", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Play Spin", url: "https://ritualplayyy.netlify.app/", creatorHandle: "siuuuu7707", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Siggy Miner", url: "https://siggy-miner-ritual.vercel.app/", creatorHandle: "_._mingyu_._", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Fate Engine", url: "https://ritual-fate-engine.netlify.app/", creatorHandle: "Murat", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Risa Finance", url: "https://risa-finance.netlify.app/", creatorHandle: "septian227", category: "finance", approved: true, flaggedForReview: true, needsLinkRecheck: true },
+  { name: "Ritual Learn", url: "https://ritual-learn.vercel.app/", creatorHandle: "dotmantissa", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Flip Game", url: "https://ritual-flip-card-game.fun/", creatorHandle: "Hanna_tran", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Survival", url: "https://ritualist-game.vercel.app/", creatorHandle: "kaffee8888", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "The Cauldron", url: "https://the-cauldron-iota.vercel.app/", creatorHandle: "mmorgs", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual App Revoke", url: "https://ritualapp-revoke.vercel.app/", creatorHandle: "nostalgiagila", category: "tool", approved: true, flaggedForReview: true, needsLinkRecheck: false },
+  { name: "Ritual Time Capsule", url: "https://ritual-time-capsule.vercel.app/", creatorHandle: "miretu", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Banner NFT", url: "https://nft-ritual-banner-x.vercel.app/", creatorHandle: "rizannn", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Fortune", url: "https://ritualfortunes-juqy.vercel.app/", creatorHandle: "Kej", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Siggy Run", url: "https://siggyrunv2.vercel.app/", creatorHandle: "aliorbz", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Stealth Drop", url: "https://stealth-drop-omega.vercel.app/", creatorHandle: "versus777", category: "finance", approved: true, flaggedForReview: true, needsLinkRecheck: false },
+  { name: "Ritual Friend Zone", url: "https://ritual-friend.vercel.app/", creatorHandle: "Willox", category: "social", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Teacher Hub", url: "https://ritual-teacher-hjb3.vercel.app/", creatorHandle: "kitoccrypto", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Blockie NFT Dapp", url: "https://ritual-testnet-six.vercel.app/", creatorHandle: "blockiexyz", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Agent Terminal", url: "https://ritual-agent-feeds.vercel.app/", creatorHandle: "NXR", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Deploy Contract", url: "https://ritual-dapp.vercel.app/", creatorHandle: "babangaip", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Sigil Ritual Playground", url: "https://sigil-ritual.auranode.xyz/", creatorHandle: "hidayahhtaufik", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Signature Cards", url: "https://ritual-signature-cards.vercel.app/", creatorHandle: "antgeo13", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "InferStake", url: "https://inferstake.vercel.app/", creatorHandle: "tanvirmiqbal", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Scratch", url: "https://ritual-scratch.vercel.app/", creatorHandle: "abmdrop", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Relic Hunt", url: "https://ritual-relic-hunt.vercel.app/", creatorHandle: "flaha", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Quiz", url: "https://ritual-speed-quiz.vercel.app/", creatorHandle: "i_xer0", category: "quiz", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Claw Carnival", url: "https://ritual-carnival.vercel.app/", creatorHandle: "tanjiiiiiiii", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Restore Puzzle", url: "https://ritual-pixel-quest.vercel.app/", creatorHandle: "kenavee", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Collection", url: "https://ritual-collection.vercel.app/", creatorHandle: "tripppin666", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual's Dead Man Switch", url: "https://deadman-switch.netlify.app/", creatorHandle: "Rohit", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Dunce", url: "https://cranky-dunces-unlocks-ritualmainnet.vercel.app/", creatorHandle: "Cranky", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Contract Deploy", url: "https://ritual-create-contract.vercel.app/", creatorHandle: "Joyesh", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Type", url: "https://ritualtypeedu.netlify.app/", creatorHandle: "beacon45", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Connection Identity", url: "https://ritualconnectionidentity.vercel.app/", creatorHandle: "saamzzzbro", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Atlas", url: "https://ritual-atlas.vercel.app/", creatorHandle: "cryptowood", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual PFP OnChain", url: "https://ritual-pfp-onchain.vercel.app/", creatorHandle: "beeeear.", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Narrative Pulse", url: "https://ritual-narrative-pulse.vercel.app/", creatorHandle: "bullex0", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritty Market", url: "https://rittymarket.xyz/", creatorHandle: "frisco_fr", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Puzzle (Siggy World)", url: "https://ritual-puzzles.vercel.app/", creatorHandle: "ms.jaeee", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Clicker", url: "https://ritual-clicker.vercel.app/", creatorHandle: "callmehannnn", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Guys", url: "https://ritual-guys.vercel.app/", creatorHandle: "herrybrown09", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Siggy Surfers", url: "https://www.siggy.surf/", creatorHandle: "tutufly_yy", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Passport", url: "https://myritualpassport.vercel.app/", creatorHandle: "itsmeagoyyy", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Network", url: "https://ritual-network-bice.vercel.app/", creatorHandle: "youngest_grandad_marvell", category: "social", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Tetris", url: "https://ritual-tetris.vercel.app/", creatorHandle: "0xeyesofetresia", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual PFP Generator", url: "https://ritualpfp.xyz/", creatorHandle: "dayzzzer", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Matheritual", url: "https://matheritual.vercel.app/", creatorHandle: "philip3828", category: "quiz", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "The Courtroom", url: "https://the-courtroom.vercel.app/", creatorHandle: "snooowflake", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Freecasino", url: "https://ritual-casino.vercel.app/", creatorHandle: "befree0x", category: "finance", approved: true, flaggedForReview: true, needsLinkRecheck: false },
+  { name: "Ritual Wall", url: "https://ritualwallinferencenet.netlify.app/", creatorHandle: "seesac_", category: "social", approved: true, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Ritual Command Center", url: "https://ritual-wallet-dashboard.vercel.app/", creatorHandle: "0xdenta", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Enshrined", url: "https://enshrined-psi.vercel.app/", creatorHandle: "starknight50x", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "RitualFly", url: "https://ritualfly.vercel.app/", creatorHandle: "Dezzy", category: "finance", approved: true, flaggedForReview: true, needsLinkRecheck: false },
+  { name: "The Arbiter", url: "https://ritual-arbiter.vercel.app/", creatorHandle: "lambezii", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Divination", url: "https://ritual-divination.vercel.app/", creatorHandle: "tembi4kinn", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Chess", url: "https://ritchess.vercel.app/", creatorHandle: "classic7045", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "OnchainQuiz", url: "https://onchain-quiz-ritual.vercel.app/", creatorHandle: "edward_evm", category: "quiz", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Prompt Forge", url: "https://ritual-prompt-forge.vercel.app/", creatorHandle: "basss_eth", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ancestra", url: "https://ancestra-dex.vercel.app/", creatorHandle: "softieeexx", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Vein", url: "https://vein-alpha.vercel.app/", creatorHandle: "John", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "TamaSave", url: "https://tamasave.vercel.app/", creatorHandle: "chronic_10", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritualmon", url: "https://ritualmon.vercel.app/", creatorHandle: "zegnanft", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "AgentBounty", url: "https://agent-bounty-ruddy.vercel.app/", creatorHandle: "lynn01393", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "PalmWise AI", url: "https://palmwise-ai.vercel.app/", creatorHandle: "kryptophilic", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Unofficial Faucet", url: "https://ritualunofficialfaucet.eu.cc/", creatorHandle: "mopato11", category: "finance", approved: true, flaggedForReview: true, needsLinkRecheck: false },
+  { name: "Ritual Multi Sender", url: "https://v0-ritualbatch.vercel.app/app/sender", creatorHandle: "jepannyaa_71337", category: "finance", approved: true, flaggedForReview: true, needsLinkRecheck: false },
+  { name: "Ritual Mint", url: "https://ritual-profile-mint-web3-mint-rvix.vercel.app/", creatorHandle: "tanjiro66_", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Engagement Badge", url: "https://ritual-explorer-badge.vercel.app/", creatorHandle: "james557", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Spin Wheels", url: "https://spin-wheels-ritual.vercel.app/", creatorHandle: "rakswp", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Community Card", url: "https://ritual-community-card.vercel.app/", creatorHandle: "alfadanil", category: "identity", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Shrine Lab", url: "https://shrine.qzz.io/", creatorHandle: "0xanamul", category: "game", approved: true, flaggedForReview: true, needsLinkRecheck: false },
+  { name: "Ritual Bubble Shooter", url: "https://ritual-bubble-shooter-jt.vercel.app/", creatorHandle: "jt_026", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritty.ai", url: "https://ritty-ai.vercel.app/", creatorHandle: "omarnouval", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Hub", url: "https://ritualdex.vercel.app/level", creatorHandle: "oahid9", category: "finance", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "LastSignal", url: "https://lastsignal.vercel.app/", creatorHandle: "maxiq1011", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Academy", url: "https://ritualacademy.xyz/", creatorHandle: "officerpayne07", category: "other", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Siggy Tails", url: "https://siggy-tail.vercel.app/", creatorHandle: "kastew333", category: "game", approved: false, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Ritual Pacman", url: "https://ritual-pacman.vercel.app/", creatorHandle: "abhigupta0284", category: "game", approved: false, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Quorum Work", url: "https://ritual-quorum-work.vercel.app/market", creatorHandle: "gengar.shadow", category: "finance", approved: false, flaggedForReview: true, needsLinkRecheck: true },
+  { name: "Ritual Consult", url: "https://constual.vercel.app/", creatorHandle: "nxrskyaa", category: "other", approved: false, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Ritual NFT", url: "https://nft-fores.vercel.app/", creatorHandle: "0xarees", category: "identity", approved: false, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Ritual Raid", url: "https://ritual-raid.vercel.app/", creatorHandle: "zella.nft", category: "game", approved: false, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Siggy Maker", url: "https://siggy-maker.vercel.app/", creatorHandle: "crypto20226", category: "tool", approved: false, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Ritual Council", url: "https://ritual-council-ai.vercel.app/", creatorHandle: "yes2511", category: "other", approved: false, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Omen", url: "https://omen-ritual.vercel.app/", creatorHandle: "richard096877", category: "other", approved: false, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Untold", url: "https://untold-badang.vercel.app/", creatorHandle: "badang", category: "other", approved: false, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Ritual Quest", url: "https://ritual-quest-game.vercel.app/", creatorHandle: "purplelover5", category: "game", approved: false, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Agentforge", url: "https://agentforge-ritual.pages.dev/", creatorHandle: "rivale.eth", category: "tool", approved: false, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Ritual Memory Quest", url: "https://ritual-memory-quest.lovable.app/", creatorHandle: "hala.madriid", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Chain Wallet Monitor", url: "https://ritbot.vercel.app/", creatorHandle: "crypticream_73120", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+  { name: "Ritual Runner", url: "https://ritual-runner-gjim2571s-projects.vercel.app/", creatorHandle: "martin66955", category: "game", approved: true, flaggedForReview: false, needsLinkRecheck: true },
+  { name: "Ritual Agent Craft", url: "https://ritual-agent-craft-mg.vercel.app/", creatorHandle: "_._mingyu_._", category: "tool", approved: true, flaggedForReview: false, needsLinkRecheck: false },
+]
+
+async function main() {
+  for (const d of dapps) {
+    await prisma.dapp.create({
+      data: {
+        name: d.name,
+        url: d.url,
+        creatorHandle: d.creatorHandle,
+        category: d.category,
+        status: 'verified',
+        approved: d.approved,
+        flaggedForReview: d.flaggedForReview,
+        needsLinkRecheck: d.needsLinkRecheck,
+        clickCount: 0,
+      },
+    })
+  }
+}
+
+main().finally(() => prisma.$disconnect())
+
+Important behavioral rules
+
+
+Never fabricate or pad click counts.
+Never store private keys, seed phrases, or wallet signatures anywhere.
+Every external dapp link must route through /go/[id], zero exceptions.
+Always verify on-chain server-side before trusting any "I paid" or "I'm admin" claim — never rely on client state alone for anything that gates access or data.
+12 dapps in the seed data have approved: false, needsLinkRecheck: true — they will not appear publicly until manually checked and approved via the admin panel. This is intentional, not a bug.
+
+
+Deliverable
+
+A working app runnable with npm run dev on Replit, running entirely on Supabase Postgres via Prisma from the very first run (no SQLite ever used), seed script run once, ready to later push to GitHub and deploy to Vercel using the same SUPABASE_DATABASE_URL/SUPABASE_DIRECT_URL values, plus FEE_RECEIVER_ADDRESS/ADMIN_WALLET_ADDRESS already hardcoded so no extra secrets are needed for those.

@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("SUPABASE_DATABASE_URL")
+  directUrl = env("SUPABASE_DIRECT_URL")
+}
+
+enum Category {
+  game
+  tool
+  identity
+  finance
+  quiz
+  social
+  other
+}
+
+enum DappStatus {
+  verified
+  unverified
+  reported
+}
+
+model Dapp {
+  id              String     @id @default(cuid())
+  name            String
+  url             String     @unique
+  creatorHandle   String?
+  category        Category
+  description     String?
+  status          DappStatus @default(verified)
+  flaggedForReview Boolean   @default(false)
+  clickCount      Int        @default(0)
+  createdAt       DateTime   @default(now())
+  approved        Boolean    @default(false)
+  needsLinkRecheck Boolean   @default(false)
+
+  clickLogs ClickLog[]
+  reports   Report[]
+}
+
+model ClickLog {
+  id        String   @id @default(cuid())
+  dappId    String
+  timestamp DateTime @default(now())
+
+  dapp Dapp @relation(fields: [dappId], references: [id], onDelete: Cascade)
+}
+
+model Report {
+  id        String   @id @default(cuid())
+  dappId    String
+  reason    String
+  createdAt DateTime @default(now())
+  resolved  Boolean  @default(false)
+
+  dapp Dapp @relation(fields: [dappId], references: [id], onDelete: Cascade)
+}
+
+model PaidAccess {
+  id        String   @id @default(cuid())
+  address   String
+  txHash    String   @unique
+  sessionId String
+  paidAt    DateTime @default(now())
+}
