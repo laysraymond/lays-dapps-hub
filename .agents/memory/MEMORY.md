@@ -1,0 +1,3 @@
+- [Design system tokens](design-tokens.md) — emerald #16C784 primary; bg #050505; avoid old teal #0F6E56 in new work
+- [DB seeding pattern](db-seeding.md) — use plain `node prisma/seed.js` with `createMany + skipDuplicates`; ts-node/tsx both time out
+- [Wallet error handling](wallet-errors.md) — WalletGate catches EIP-1193 code 4100/4001 + "not authorized" messages; shows Reconnect prompt

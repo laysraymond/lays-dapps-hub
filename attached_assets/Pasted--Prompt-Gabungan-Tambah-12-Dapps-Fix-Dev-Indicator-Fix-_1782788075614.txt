@@ -1,0 +1,115 @@
+# Prompt Gabungan — Tambah 12 Dapps + Fix Dev Indicator + Fix Error Wallet + Redesain Visual
+
+Paste SEKALI ke project Replit yang sudah ada. Ini gabungan 4 hal sekaligus, dikerjakan berurutan dalam satu sesi: (1) tambah data dapps baru, (2) matikan Next.js dev indicator, (3) perbaiki error handling wallet, (4) redesain visual total (styling only).
+
+---
+
+## Part 0 — Tambah 12 dapps baru ke database
+
+Insert these 12 new rows into the dapps table (same convention as existing data — `status: 'verified'`, `approved: true`, `flaggedForReview: false`, `needsLinkRecheck: false`, `clickCount: 0`), using whichever insert method matches this project's current ORM/data layer (check the existing seed script to match the pattern exactly). Check the existing duplicate-url logic before inserting, in case any of these already exist:
+
+```ts
+const newDapps = [
+  { name: "Ritual Oripa", url: "https://ritualoripa.vercel.app/home", creatorHandle: "aetherion.eth", category: "game" },
+  { name: "Ritual Prediction Markets", url: "https://marvelous-liger-ad1817.netlify.app/", creatorHandle: "hally7406_", category: "finance" },
+  { name: "Siggy Multi-Dimensional Cat", url: "https://siggy.decka.my.id/deploy/sovereign", creatorHandle: "decka_tan", category: "other" },
+  { name: "Ritual Audit", url: "https://ritual-chain-workshop-tau.vercel.app/", creatorHandle: "Jsp", category: "tool" },
+  { name: "Ritual Sovereign Agent", url: "https://sovereign-deployer.vercel.app/", creatorHandle: "0xfrio", category: "tool" },
+  { name: "AI Bounty Judge", url: "https://ritual-ai-bounty-judge.vercel.app/", creatorHandle: "Kency17", category: "tool" },
+  { name: "Ritual Swap", url: "https://ritual-swap-dapp.vercel.app/", creatorHandle: "melophile0646", category: "finance" },
+  { name: "Agent Arcana", url: "https://agentarcana-lyart.vercel.app/", creatorHandle: "katty_2207", category: "identity" },
+  { name: "RitualLend", url: "https://rituallend.vercel.app/", creatorHandle: "cryptier0", category: "finance" },
+  { name: "RitualKnot", url: "https://ritualknot.tech/", creatorHandle: "usman_nazir07", category: "game" },
+  { name: "Onchain Translator", url: "https://ritual-onchain-translator.vercel.app/", creatorHandle: "y0ru.ir", category: "tool" },
+]
+```
+
+## Part 1 — Disable the Next.js dev indicator (bottom-left icon/menu)
+
+The icon and popup menu showing "Route: Static", "Try Turbopack", "Route Info", "Preferences" in the bottom-left corner is Next.js's built-in development indicator, not part of our app code. Disable it in `next.config.js` / `next.config.ts`:
+
+```ts
+const nextConfig = {
+  devIndicators: false,
+}
+```
+
+(If this project's Next.js version uses a different shape for this option, check the installed Next.js version's docs for the correct `devIndicators` syntax and apply the equivalent — the goal is simply: no dev indicator badge/menu visible in the bottom-left corner.)
+
+## Part 2 — Handle the wallet "not authorized" error gracefully
+
+The runtime error "The source https://[replit-preview-url] has not been authorized yet" is thrown by the browser's wallet extension itself (visible in the stack trace as a `chrome-extension://` source) — it happens when the wallet extension hasn't granted this specific origin permission yet, or when a previously-connected session becomes stale (e.g. after the Replit preview URL changes on restart). This is not fixable purely in our code (it's the extension's own permission system), but right now it's surfacing as an unhandled runtime error that crashes into Next.js's red error overlay, which looks broken to visitors. Fix the error handling so it degrades gracefully instead:
+
+- Wrap all wallet interactions (`connect()`, `sendTransaction()`, `switchChain()`, etc.) in try/catch blocks.
+- When a call fails with an authorization/permission-related error (check the error message/code for things like "not been authorized", "not authorized by the user", EIP-1193 error code `4100`, or a rejected/disconnected provider state), do NOT let it bubble up as an unhandled exception. Instead, reset the wallet connection state in the UI and show a clear message: "Your wallet connection needs to be refreshed — please reconnect." with a prominent "Reconnect" button that re-triggers the connect flow from scratch.
+- This applies across all wallet-gated pages (home, leaderboard, submit, proof-log) and the admin page's wallet check — anywhere a wallet call happens, it should fail soft into a "Reconnect" prompt, never into a raw crash overlay.
+
+## Part 3 — Full visual redesign (styling only — read carefully before starting)
+
+**Act as a senior UI/UX designer and frontend engineer.**
+
+**IMPORTANT — hard constraint:** Do NOT change any existing functionality, backend logic, API calls, database schema, wallet connection flow (other than the graceful-failure handling from Part 2), leaderboard calculations, submission process, or routing. Only improve the visual design, layout, typography, spacing, animations, branding, and responsiveness. If you find yourself wanting to touch any `.ts`/`.tsx` logic outside of JSX markup, className strings, and pure presentation components, stop and reconsider — this is a presentation-layer-only pass.
+
+**Project context:** This is a community-driven Ritual ecosystem directory called "Lays Dapps Hub" (note: keep the existing brand name "Lays Dapps Hub" — do not rename it back to "Ritual Dapps Hub").
+
+**Design reference:** Use the Ritual logo (already placed at `/public/logo.png`) as the primary branding inspiration for the geometric motifs described below.
+
+**Visual direction:** Premium Web3 ecosystem platform. Modern SaaS dashboard. Professional startup quality. Dark theme with elegant contrast. Futuristic but clean. Similar quality level to Stripe, Vercel, Linear, Ritual, Farcaster, and GitHub.
+
+**Color system (replace the existing teal/amber tokens with this new palette, applied consistently everywhere via the existing design-system token approach):**
+- Primary: Deep black `#050505`, Graphite `#111111`, Surface `#171717`
+- Accent: Ritual emerald green `#16C784`, soft glow variations, minimal gradients using emerald + dark graphite
+- Text: Primary `#FFFFFF`, Secondary `#A1A1AA`, Muted `#71717A`
+- Status badges (verified/unverified/reported) keep their semantic meaning but should be restyled to fit this new palette while still always pairing color with a text label.
+
+**Branding — visual patterns inspired by the Ritual logo:**
+- Geometric interconnected shapes, subtle node-network motifs, abstract woven patterns
+- Background decorative elements with very low opacity
+- Logo-inspired dividers and card accents
+
+**Hero section:**
+- Subtle animated grid background
+- Logo-inspired geometric glow effect
+- Better typography hierarchy, strong headline, better spacing, professional container widths
+- Headline: "Discover the Ritual Ecosystem"
+- Subheadline: "Explore community-built applications, tools, games, infrastructure, and AI-powered experiences built on Ritual."
+- Add three badges near the hero: Total Dapps, Verified Projects, Community Driven (pull the actual live numbers from the existing stats data, don't hardcode them — this must reflect the updated count after Part 0's inserts)
+
+**Stat cards (Total Dapps / Verified / Clicks Today / Reported):**
+- Glassmorphism effect, subtle border glow, hover lift animation, better icon styling, animated counter appearance (count up from 0 to the real value on load), consistent card heights, improved spacing
+
+**Card design system-wide:**
+- Border radius 20px, soft shadow, dark glass effect, hover transitions, emerald accent line, premium dashboard feel — apply via the shared `Card` component so every card site-wide updates consistently
+
+**Navigation:**
+- Sticky navigation, blur backdrop, better wallet button styling, active state indicators, smooth hover animations, logo prominence — keep all current nav functionality (links, wallet address display, disconnect button) exactly as-is, just restyle it
+
+**Dapp directory grid:**
+- Better grid layout, cleaner cards, category badges, verification indicators, better typography, improved spacing
+
+**Interactions/animations (keep lightweight, don't hurt performance):**
+- Fade-in on scroll, hover transitions, card elevation, smooth page transitions
+
+**Responsive design:** Optimize for desktop, tablet, and mobile with professional spacing/alignment at every breakpoint.
+
+**Background:** Subtle radial gradients, logo-inspired geometric watermark, faint network pattern, layered depth effects — all very low opacity so they never interfere with text readability.
+
+**Accessibility:** Maintain excellent contrast, keep readability high, preserve usability — double-check the new emerald-on-graphite color combinations meet WCAG AA contrast for text.
+
+**Bonus improvements (nice-to-have, add if time/scope allows without breaking the "styling only" constraint):**
+1. Animated gradient border around verified-project cards
+2. Floating Ritual-inspired geometric shapes in the background
+3. Spotlight cursor effect on desktop
+4. Premium empty states (e.g. for an empty leaderboard or no search results)
+5. Skeleton loading states for stat cards and the dapp grid while data loads
+6. Subtle emerald glow on primary action buttons (Connect Wallet, Pay, Approve)
+7. Dashboard-style section dividers
+8. Additional badge variants: Trending, New, Community Pick (visual only for now — wire to real logic later if desired, don't fabricate fake "trending" data)
+9. Micro-interactions on buttons (press/hover states)
+10. A visual identity fully inspired by the Ritual logo's geometry throughout
+
+**Final goal:** Make the site look like a funded Web3 startup product rather than a basic community directory, while preserving 100% of existing functionality untouched.
+
+### Deliverable
+
+Report back: (1) final dapp count after Part 0's inserts, (2) confirmation the dev indicator is gone, (3) confirmation wallet errors now show a "Reconnect" prompt instead of a crash overlay, (4) a summary of what was restyled, and explicit confirmation that no functionality, API routes, database queries, or business logic were changed beyond the new data insert — only presentation.
