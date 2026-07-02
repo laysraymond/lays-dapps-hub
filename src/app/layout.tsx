@@ -8,6 +8,11 @@ import { Footer } from "@/components/layout/Footer"
 export const metadata: Metadata = {
   title: "Lays Dapps Hub — Ritual Community Directory",
   description: "Community-run directory of dApps, tools, and games built around the Ritual AI/crypto ecosystem.",
+  icons: {
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

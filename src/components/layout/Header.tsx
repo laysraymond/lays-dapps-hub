@@ -14,6 +14,7 @@ import { Menu, X, Globe, Github } from "lucide-react"
 const navLinks = [
   { href: "/", label: "Home" },
   { href: "/leaderboard", label: "Leaderboard" },
+  { href: "/builders", label: "Builders" },
   { href: "/submit", label: "Submit" },
   { href: "/proof-log", label: "Proof Log" },
   { href: "/about", label: "About" },

@@ -1,0 +1,166 @@
+# FINAL MASTER PROMPT — Lays Dapps Hub (sekali paste, semua selesai)
+
+Paste SEMUA isi ini ke Replit AI Agent. Kerjakan semua bagian secara berurutan dalam satu sesi tanpa berhenti menunggu konfirmasi kecuali ada error kritis. Di akhir semua bagian selesai, jalankan `git add . && git commit -m "builder leaderboard, redesign, fixes" && git push`.
+
+---
+
+## Part 1 — Builder Leaderboard (`/builders`)
+
+Add a new page `/builders` showing a leaderboard of dApp builders ranked by combined impact.
+
+**Add "Builders" to the existing navbar** between "Leaderboard" and "Submit", same styling as existing nav items.
+
+**New API route `/api/builders`:**
+Query the `Dapp` table, aggregate by `creatorHandle`, return top 100:
+
+```ts
+SELECT 
+  creatorHandle,
+  COUNT(*) as totalDapps,
+  SUM(clickCount) as totalClicks,
+  MAX(createdAt) as latestDapp
+FROM Dapp
+WHERE approved = true
+GROUP BY creatorHandle
+ORDER BY totalClicks DESC, totalDapps DESC
+LIMIT 100
+```
+
+Return JSON array, each item:
+```ts
+{
+  handle: string,       // e.g. "kency17"
+  totalDapps: number,
+  totalClicks: number,
+  latestDapp: string,   // name of most recently added dapp
+  xUrl: string,         // "https://x.com/" + handle (strip any leading @)
+}
+```
+
+**Page layout `/builders`:**
+- Title: "Builder Leaderboard", subtitle: "Ranked by community impact — total clicks across all dApps built on Ritual."
+- Stat at top: "X builders have shipped dApps on Ritual" (real number from data)
+- Top 3: large podium-style cards with rank badge, handle linked to X profile, totalDapps, totalClicks, latestDapp name. Emerald glow `#16C784` on #1 card. "🏆 Top Builder" badge on rank #1.
+- Rank 4–100: clean ranked table with rank number, handle (linked to X), totalDapps, totalClicks, latestDapp. Render all 100 rows at once (no pagination).
+- Every handle must link to `https://x.com/[handle]` in a new tab with `rel="noopener noreferrer"`. Strip any leading `@` from handle before building the URL.
+- Skeleton loading state while fetching, empty state if no data.
+- Apply the same wallet + session fee gate as all other gated pages — reuse existing gate component exactly, no changes to gate logic.
+- No new database tables, no schema changes, no seed changes.
+
+---
+
+## Part 2 — Disable Next.js dev indicator
+
+In `next.config.js` / `next.config.ts`, add:
+```ts
+devIndicators: false
+```
+Check the installed Next.js version for the correct syntax. Goal: no dev indicator icon/menu in bottom-left corner.
+
+---
+
+## Part 3 — Graceful wallet error handling
+
+The error "The source [url] has not been authorized yet" from wallet extensions currently crashes into Next.js red error overlay. Fix it to degrade gracefully:
+
+- Wrap all wallet calls (`connect()`, `sendTransaction()`, `switchChain()`) in try/catch
+- On authorization/permission errors (message contains "not been authorized", "not authorized", EIP-1193 code `4100`, or rejected/disconnected provider): reset connection state and show a clean "Your wallet connection needs to be refreshed — please reconnect." message with a "Reconnect" button that re-triggers the connect flow
+- Apply to all wallet-gated pages and admin page
+- Never let wallet errors bubble up as unhandled exceptions to the error overlay
+
+---
+
+## Part 4 — Full visual redesign (styling only)
+
+**HARD CONSTRAINT: Do NOT change any functionality, API routes, database queries, business logic, wallet flow (beyond Part 3), or routing. Styling and presentation layer only.**
+
+Keep brand name "Lays Dapps Hub" exactly as-is.
+
+**New color system (replace existing tokens, define as CSS variables or Tailwind config, never inline):**
+- Deep black `#050505`, Graphite `#111111`, Surface `#171717`
+- Accent: Emerald `#16C784`, minimal gradients emerald + dark graphite
+- Text: Primary `#FFFFFF`, Secondary `#A1A1AA`, Muted `#71717A`
+- Status badges keep semantic meaning, restyled to fit new palette, always color + text label
+
+**Build these shared components FIRST, then compose every page from them:**
+PrimaryButton, SecondaryButton, Card, Modal, Badge, Input, Dropdown, SearchBar, NavigationItem — one unified style, zero one-off per-page styling.
+
+**Hero section:**
+- Animated grid background (subtle, low opacity)
+- Geometric glow effect inspired by Ritual logo
+- Headline: "Discover the Ritual Ecosystem"
+- Subheadline: "Explore community-built applications, tools, games, infrastructure, and AI-powered experiences built on Ritual."
+- Three live badges: Total Dapps, Verified Projects, Community Driven (real numbers from stats API)
+
+**Stat cards:** Glassmorphism, border glow, hover lift, animated counter (0 to real value on load), consistent heights
+
+**Cards site-wide:** border-radius 20px, dark glass effect, hover transition, emerald accent line
+
+**Navbar:** sticky, blur backdrop, better wallet button, active state indicators, smooth hover animations
+
+**Dapp grid:** better layout, cleaner cards, category badges, verification indicators
+
+**Animations:** fade-in on scroll, hover transitions, card elevation — lightweight only
+
+**Responsive:** desktop, tablet, mobile — professional spacing at all breakpoints
+
+**Background:** subtle radial gradients, logo-inspired geometric watermark (very low opacity), faint network pattern
+
+**Accessibility:** maintain WCAG AA contrast on all new emerald-on-graphite combinations
+
+**Apply same design to ALL pages and states:** Home, Leaderboard, Builder Leaderboard, Submit, Proof Log, About, Admin, Wallet Connection screens, Error pages, Empty states, Loading states — every single one must feel like the same premium product. No page left unstyled.
+
+**Bonus (add if scope allows):**
+1. Animated gradient border on verified cards
+2. Floating geometric shapes in background (very subtle)
+3. Spotlight cursor effect on desktop
+4. Skeleton loading states for all data-fetching sections
+5. Emerald glow on primary action buttons
+6. Section dividers
+7. Micro-interactions on buttons
+
+**Quality bar:** Should feel like a funded Web3 startup — Stripe, Vercel, Linear, Ritual, Farcaster quality. Not a basic community directory.
+
+---
+
+## Part 5 — Favicon
+
+Set the favicon to use the existing `/public/logo.png` file:
+
+In `app/layout.tsx` (or wherever the root layout/head is defined), add:
+```ts
+export const metadata = {
+  // ...existing metadata...
+  icons: {
+    icon: '/logo.png',
+    shortcut: '/logo.png',
+    apple: '/logo.png',
+  },
+}
+```
+
+If the project uses a different metadata/head pattern, apply the equivalent. Goal: the Ritual logo appears as the browser tab favicon instead of the default Next.js icon.
+
+---
+
+## Part 6 — Final git push
+
+After ALL parts above are complete and `npm run dev` runs cleanly with no console errors:
+
+```bash
+git add .
+git commit -m "add builder leaderboard top 100, premium redesign, wallet error fix, favicon, disable dev indicator"
+git push
+```
+
+---
+
+## Deliverable checklist (report back on each):
+- [ ] `/builders` page live with top 100, podium top 3, X profile links working
+- [ ] "Builders" link in navbar on all pages
+- [ ] Dev indicator gone from bottom-left
+- [ ] Wallet errors show "Reconnect" prompt instead of crash overlay
+- [ ] Full redesign applied to ALL pages consistently
+- [ ] Favicon shows Ritual logo in browser tab
+- [ ] `git push` completed successfully
+- [ ] No existing functionality changed — only presentation layer touched
